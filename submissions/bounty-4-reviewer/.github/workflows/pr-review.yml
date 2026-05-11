@@ -1,0 +1,56 @@
+name: PR Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Get PR diff
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3.diff" \
+            "${{ github.event.pull_request.diff_url }}" > pr.diff
+
+      - name: Run claude-review
+        run: |
+          python3 claude-review.py --pr "${{ github.event.pull_request.html_url }}" --diff pr.diff --output review.md
+
+      - name: Post review comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 << 'SCRIPT'
+          import os, json, urllib.request
+
+          pr_url = os.environ["GITHUB_API_URL"] + "/repos/" + os.environ["GITHUB_REPOSITORY"] + "/issues/" + os.environ["PR_NUMBER"] + "/comments"
+          with open("review.md") as f:
+              body = f.read()
+
+          data = json.dumps({"body": body}).encode()
+          req = urllib.request.Request(
+              pr_url,
+              data=data,
+              headers={
+                  "Authorization": f"token {os.environ['GITHUB_TOKEN']}",
+                  "Accept": "application/vnd.github.v3+json",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          urllib.request.urlopen(req, timeout=30)
+          SCRIPT
